@@ -1,0 +1,285 @@
+From dea0f6272889adcff846144fff5714c076067b16 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Thu, 7 Nov 2019 12:46:15 +0100
+Subject: [PATCH 1/3] testenv: HTTPTest.begin() should return exit value
+
+* testenv/test/http_test.py: Ensure that HTTPTest.begin() always retuns a value
+
+Previously the HTTPTest.begin() method always returned None. However this is not consistent with the begin() implementation of the parent class (BaseTest). This change ensures that HTTPTest.begin() returns a value.
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ testenv/test/http_test.py | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/testenv/test/http_test.py b/testenv/test/http_test.py
+index fef0c2ef..462ac6e7 100644
+--- a/testenv/test/http_test.py
++++ b/testenv/test/http_test.py
+@@ -42,7 +42,7 @@ class HTTPTest(BaseTest):
+                 print_green("Test Passed.")
+             else:
+                 self.tests_passed = False
+-            super(HTTPTest, self).begin()
++            return super(HTTPTest, self).begin()
+ 
+     def instantiate_server_by(self, protocol):
+         server = {HTTP: HTTPd,
+-- 
+2.21.0
+
+
+From 7fba12cf25ff7cc352f0f5df7d91670df7035823 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Thu, 7 Nov 2019 13:01:44 +0100
+Subject: [PATCH 2/3] testenv: Allow definition of environment variables for
+ wget execuion
+
+* testenv/README: Added description for new EnvironmentVariable hook
+* testenv/conf/environment_variable.py: Added implementation of EnvironmentVariable hook
+* testenv/test/base_test.py: Modified exec_wget() to enable use of EnvironmentVariable hook
+
+Added new test hook called EnvironmentVariables, for defining environment variables when wget is executed in tests. This is handy for testing environment variables, which are accepted by wget.
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ testenv/README                        |  3 +++
+ testenv/conf/environment_variables.py | 14 ++++++++++++++
+ testenv/test/base_test.py             |  6 +++++-
+ 3 files changed, 22 insertions(+), 1 deletion(-)
+ create mode 100644 testenv/conf/environment_variables.py
+
+diff --git a/testenv/README b/testenv/README
+index aca8cdda..d4fabddd 100644
+--- a/testenv/README
++++ b/testenv/README
+@@ -224,6 +224,9 @@ executed. The currently supported options are:
+     file. While all Download URL's are passed to Urls, a notable exception is
+     when in-url authentication is used. In such a case, the URL is specified in
+     the WgetCommands string.
++    * EnvironmentVariables: A dictionary with key-value items, which will be
++    defined as environment variables during the execution of wget command in
++    test.
+ 
+ Post-Test Hooks:
+ ================================================================================
+diff --git a/testenv/conf/environment_variables.py b/testenv/conf/environment_variables.py
+new file mode 100644
+index 00000000..323c051c
+--- /dev/null
++++ b/testenv/conf/environment_variables.py
+@@ -0,0 +1,14 @@
++from conf import hook
++
++""" Test Option: EnvironmentVariables
++This hook is used to define environment variables used for execution of wget
++command in test."""
++
++
++@hook(alias='EnvironmentVariables')
++class URLs:
++    def __init__(self, envs):
++        self.envs = envs
++
++    def __call__(self, test_obj):
++        test_obj.envs.update(**self.envs)
+diff --git a/testenv/test/base_test.py b/testenv/test/base_test.py
+index dbf4678f..04a6f748 100644
+--- a/testenv/test/base_test.py
++++ b/testenv/test/base_test.py
+@@ -51,6 +51,7 @@ class BaseTest:
+ 
+         self.wget_options = ''
+         self.urls = []
++        self.envs = dict()
+ 
+         self.tests_passed = True
+         self.ready = False
+@@ -97,12 +98,15 @@ class BaseTest:
+         cmd_line = self.gen_cmd_line()
+         params = shlex.split(cmd_line)
+         print(params)
++        envs = {"HOME": os.getcwd()}
++        envs.update(**self.envs)
++        print(envs)
+ 
+         if os.getenv("SERVER_WAIT"):
+             time.sleep(float(os.getenv("SERVER_WAIT")))
+ 
+         try:
+-            ret_code = call(params, env={"HOME": os.getcwd()})
++            ret_code = call(params, env=envs)
+         except FileNotFoundError:
+             raise TestFailed("The Wget Executable does not exist at the "
+                              "expected path.")
+-- 
+2.21.0
+
+
+From 0d50becc19ba07f34157b2842ca97675cc95fc1a Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Thu, 7 Nov 2019 13:11:30 +0100
+Subject: [PATCH 3/3] testenv: Add test for handling of no_proxy environment
+ variable
+
+* testenv/Test-no_proxy-env.py: Added new test for no_proxy env
+
+Added new test with 5 cases, which are testing various combinations of no_proxy environment variable definition and requested URLs
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ testenv/Test-no_proxy-env.py | 142 +++++++++++++++++++++++++++++++++++
+ 1 file changed, 142 insertions(+)
+ create mode 100755 testenv/Test-no_proxy-env.py
+
+diff --git a/testenv/Test-no_proxy-env.py b/testenv/Test-no_proxy-env.py
+new file mode 100755
+index 00000000..ea7f38c4
+--- /dev/null
++++ b/testenv/Test-no_proxy-env.py
+@@ -0,0 +1,142 @@
++#!/usr/bin/env python3
++from sys import exit
++from test.http_test import HTTPTest
++from test.base_test import HTTP
++from misc.wget_file import WgetFile
++
++"""
++    This test ensures, that domains with and without leftmost dot defined in
++    no_proxy environment variable are accepted by wget. The idea is to use
++    non-existing proxy server address and detect whether files are downloaded
++    when proxy settings are omitted based on no_proxy environment variable
++    value.
++
++    current wget's behavior:
++    - "no_proxy=.mit.edu"
++      - will match the domain and subdomains e.g. "www.mit.edu" or "www.subdomain.mit.edu" (Case #4)
++      - will NOT match the host "mit.edu" (Case #3)
++    - "no_proxy=mit.edu"
++      - will match the domain and subdomains e.g. "www.mit.edu" or "www.subdomain.mit.edu" (Case #2)
++      - will match the host "mit.edu" (Case #1)
++    - downside: can not match only the host
++"""
++# File Definitions
++File1 = "Would you like some Tea?"
++File2 = "With lemon or cream?"
++
++A_File = WgetFile ("File1", File1)
++B_File = WgetFile ("File2", File2)
++
++WGET_URLS = [["File1", "File2"]]
++WGET_ENVS = {
++    "http_proxy": "nonexisting.localhost:8080",
++    "no_proxy": "working1.localhost,.working2.localhost"
++}
++
++Servers = [HTTP]
++Files = [[A_File, B_File]]
++
++ExpectedReturnCodeWorking = 0
++ExpectedReturnCodeNotWorking = 4  # network error (non-existing proxy address)
++
++ExpectedDownloadedFilesWorking = [A_File, B_File]
++
++# Pre and Post Test Hooks
++test_options = {
++    "Urls"                : WGET_URLS,
++    "EnvironmentVariables": WGET_ENVS
++}
++post_test_working = {
++    "ExpectedFiles"     : ExpectedDownloadedFilesWorking,
++    "ExpectedRetcode"   : ExpectedReturnCodeWorking
++}
++post_test_not_working = {
++    "ExpectedRetcode"   : ExpectedReturnCodeNotWorking
++}
++
++# Case #1:
++# - Requested domain matches exactly the domain definition in no_proxy.
++# - Domain definition in no_proxy is NOT dot-prefixed
++# Expected result: proxy settings don't apply and files are downloaded.
++pre_case_1 = {
++    "ServerFiles"       : Files,
++    "Domains"           : ["working1.localhost"]
++}
++
++err_case_1 = HTTPTest (
++    pre_hook=pre_case_1,
++    test_params=test_options,
++    post_hook=post_test_working,
++    protocols=Servers
++).begin ()
++
++# Case #2:
++# - Requested domain is sub-domain of a domain definition in no_proxy.
++# - Domain definition in no_proxy is NOT dot-prefixed
++# Expected result: proxy settings don't apply and files are downloaded.
++pre_case_2 = {
++    "ServerFiles"       : Files,
++    "Domains"           : ["www.working1.localhost"]
++}
++
++err_case_2 = HTTPTest (
++    pre_hook=pre_case_2,
++    test_params=test_options,
++    post_hook=post_test_working,
++    protocols=Servers
++).begin ()
++
++# Case #3:
++# - Requested domain matches exactly the domain definition in no_proxy,
++#   except for the leftmost dot (".") in no_proxy domain definition.
++# - Domain definition in no_proxy IS dot-prefixed
++# Expected result: proxy settings apply and files are downloaded. This is
++#                  due to the mismatch in leftmost dot.
++# NOTE: This is inconsistent with curl's behavior, but has less drawbacks.
++pre_case_3 = {
++    "ServerFiles"       : Files,
++    "Domains"           : ["working2.localhost"]
++}
++
++err_case_3 = HTTPTest (
++    pre_hook=pre_case_3,
++    test_params=test_options,
++    post_hook=post_test_not_working,
++    protocols=Servers
++).begin ()
++
++# Case #4:
++# - Requested domain is sub-domain of a domain definition in no_proxy.
++# - Domain definition in no_proxy IS dot-prefixed
++# Expected result: proxy settings don't apply and files are downloaded.
++pre_case_4 = {
++    "ServerFiles"       : Files,
++    "Domains"           : ["www.working2.localhost"]
++}
++
++err_case_4 = HTTPTest (
++    pre_hook=pre_case_4,
++    test_params=test_options,
++    post_hook=post_test_working,
++    protocols=Servers
++).begin ()
++
++# Case #5
++# - Requested domain does not match a domain definition in no_proxy.
++# - Requested domain is NOT sub-domain of a domain definition in no_proxy.
++# Expected result: proxy settings apply and files are NOT downloaded due to
++#                  network error when using proxy with non-existing URL.
++pre_case_5 = {
++    "ServerFiles"       : Files,
++    "Domains"           : ["www.example.localhost"]
++}
++
++err_case_5 = HTTPTest (
++    pre_hook=pre_case_5,
++    test_params=test_options,
++    post_hook=post_test_not_working,
++    protocols=Servers
++).begin ()
++
++# Combine error codes from all test cases
++exit (max(err_case_1, err_case_2, err_case_3, err_case_4, err_case_5))
+-- 
+2.21.0
+

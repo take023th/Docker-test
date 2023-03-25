@@ -1,0 +1,52 @@
+From 706e71564cadc7192ac21efbf51b661c967f35b5 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Tue, 24 Mar 2020 13:18:40 +0100
+Subject: [PATCH] Don't print message about loading crl or ca-cert files with --no-verbose
+
+* src/gnutls.c (ssl_init): Use LOG_VERBOSE verbosity for informative
+  message related to loading CRL or CA certificate file.
+
+Before change [1], wget didn't produce any output related to loading CA
+certificates when --no-verbose option has been used. When --no-verbose
+option is used, only error messages and basic information should get
+printed. Information about loading CRL or CA certificate is probably not
+a basic information. Any error when loading the CRL or CA certificate
+will be still printed with --no-verbose.
+
+Some users rely on wget not printing such information and they consider
+it a regression.
+
+Reported as https://bugzilla.redhat.com/show_bug.cgi?id=1807267
+
+[1] http://git.savannah.gnu.org/cgit/wget.git/commit/?id=e4a8fe84e2b813b65d91aec29298eecabe4850a5
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ src/gnutls.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/gnutls.c b/src/gnutls.c
+index e95ecea..7ab1f08 100644
+--- a/src/gnutls.c
++++ b/src/gnutls.c
+@@ -172,7 +172,7 @@ ssl_init (void)
+       else
+         {
+           ncerts += rc;
+-          logprintf (LOG_NOTQUIET, _ ("Loaded CA certificate '%s'\n"), opt.ca_cert);
++          logprintf (LOG_VERBOSE, _ ("Loaded CA certificate '%s'\n"), opt.ca_cert);
+         }
+     }
+ 
+@@ -186,7 +186,7 @@ ssl_init (void)
+           return false;
+         }
+ 
+-      logprintf (LOG_NOTQUIET, _ ("Loaded CRL file '%s'\n"), opt.crl_file);
++      logprintf (LOG_VERBOSE, _ ("Loaded CRL file '%s'\n"), opt.crl_file);
+     }
+ 
+   DEBUGP (("Certificates loaded: %d\n", ncerts));
+--
+libgit2 0.28.2
+

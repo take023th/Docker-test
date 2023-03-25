@@ -1,0 +1,376 @@
+From b24351183ec574f81c729cbb3286aceaee3f03c8 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Mon, 30 Jul 2018 12:20:27 +0200
+Subject: [PATCH 1/6] * src/ftp.c (getftp): Fix RESOURCE LEAK found by Coverity
+
+Error: RESOURCE_LEAK (CWE-772):
+wget-1.19.5/src/ftp.c:1493: alloc_fn: Storage is returned from allocation function "fopen".
+wget-1.19.5/src/ftp.c:1493: var_assign: Assigning: "fp" = storage returned from "fopen(con->target, "wb")".
+wget-1.19.5/src/ftp.c:1811: leaked_storage: Variable "fp" going out of scope leaks the storage it points to.
+\# 1809|     if (fp && !output_stream)
+\# 1810|       fclose (fp);
+\# 1811|->   return err;
+\# 1812|   }
+\# 1813|
+
+It can happen, that "if (!output_stream || con->cmd & DO_LIST)" on line #1398 can be true, even though "output_stream != NULL". In this case a new file is opened to "fp". Later it may happen in the FTPS branch, that some error will occure and code will jump to label "exit_error". In "exit_error", the "fp" is closed only if "output_stream == NULL". However this may not be true as described earlier and "fp" leaks.
+
+On line #1588, there is the following conditional free of "fp":
+
+  /* Close the local file.  */
+  if (!output_stream || con->cmd & DO_LIST)
+    fclose (fp);
+
+Therefore the conditional at the end of the function after "exit_error" label should be modified to:
+
+  if (fp && (!output_stream || con->cmd & DO_LIST))
+    fclose (fp);
+
+This will ensure that "fp" does not leak in any case it sould be opened.
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ src/ftp.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/ftp.c b/src/ftp.c
+index 69148936..daaae939 100644
+--- a/src/ftp.c
++++ b/src/ftp.c
+@@ -1806,7 +1806,7 @@ Error in server response, closing control connection.\n"));
+ exit_error:
+ 
+   /* If fp is a regular file, close and try to remove it */
+-  if (fp && !output_stream)
++  if (fp && (!output_stream || con->cmd & DO_LIST))
+     fclose (fp);
+   return err;
+ }
+-- 
+2.17.1
+
+
+From b8be904ac7c25387672b0aa39f7cba699bffc48e Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Mon, 30 Jul 2018 15:38:45 +0200
+Subject: [PATCH 2/6] * src/http.c (check_auth): Fix RESOURCE LEAK found by
+ Coverity
+
+Error: RESOURCE_LEAK (CWE-772):
+wget-1.19.5/src/http.c:2434: alloc_fn: Storage is returned from allocation function "xmalloc".
+wget-1.19.5/lib/xmalloc.c:41:11: alloc_fn: Storage is returned from allocation function "malloc".
+wget-1.19.5/lib/xmalloc.c:41:11: var_assign: Assigning: "p" = "malloc(n)".
+wget-1.19.5/lib/xmalloc.c:44:3: return_alloc: Returning allocated memory "p".
+wget-1.19.5/src/http.c:2434: var_assign: Assigning: "auth_stat" = storage returned from "xmalloc(4UL)".
+wget-1.19.5/src/http.c:2446: noescape: Resource "auth_stat" is not freed or pointed-to in "create_authorization_line".
+wget-1.19.5/src/http.c:5203:70: noescape: "create_authorization_line(char const *, char const *, char const *, char const *, char const *, _Bool *, uerr_t *)" does not free or save its parameter "auth_err".
+wget-1.19.5/src/http.c:2476: leaked_storage: Variable "auth_stat" going out of scope leaks the storage it points to.
+\# 2474|                 /* Creating the Authorization header went wrong */
+\# 2475|               }
+\# 2476|->         }
+\# 2477|         else
+\# 2478|           {
+
+Error: RESOURCE_LEAK (CWE-772):
+wget-1.19.5/src/http.c:2431: alloc_fn: Storage is returned from allocation function "url_full_path".
+wget-1.19.5/src/url.c:1105:19: alloc_fn: Storage is returned from allocation function "xmalloc".
+wget-1.19.5/lib/xmalloc.c:41:11: alloc_fn: Storage is returned from allocation function "malloc".
+wget-1.19.5/lib/xmalloc.c:41:11: var_assign: Assigning: "p" = "malloc(n)".
+wget-1.19.5/lib/xmalloc.c:44:3: return_alloc: Returning allocated memory "p".
+wget-1.19.5/src/url.c:1105:19: var_assign: Assigning: "full_path" = "xmalloc(length + 1)".
+wget-1.19.5/src/url.c:1107:3: noescape: Resource "full_path" is not freed or pointed-to in function "full_path_write".
+wget-1.19.5/src/url.c:1078:47: noescape: "full_path_write(struct url const *, char *)" does not free or save its parameter "where".
+wget-1.19.5/src/url.c:1110:3: return_alloc: Returning allocated memory "full_path".
+wget-1.19.5/src/http.c:2431: var_assign: Assigning: "pth" = storage returned from "url_full_path(u)".
+wget-1.19.5/src/http.c:2446: noescape: Resource "pth" is not freed or pointed-to in "create_authorization_line".
+wget-1.19.5/src/http.c:5203:40: noescape: "create_authorization_line(char const *, char const *, char const *, char const *, char const *, _Bool *, uerr_t *)" does not free or save its parameter "path".
+wget-1.19.5/src/http.c:2476: leaked_storage: Variable "pth" going out of scope leaks the storage it points to.
+\# 2474|                 /* Creating the Authorization header went wrong */
+\# 2475|               }
+\# 2476|->         }
+\# 2477|         else
+\# 2478|           {
+
+Both "pth" and "auth_stat" are allocated in "check_auth()" function. These are used for creating the HTTP Authorization Request header via "create_authorization_line()" function. In case the creation went OK (auth_err == RETROK), then the memory previously allocated to "pth" and "auth_stat" is freed. However if the creation failed, then the memory is never freed and it leaks.
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ src/http.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/src/http.c b/src/http.c
+index 093be167..4e0d467a 100644
+--- a/src/http.c
++++ b/src/http.c
+@@ -2451,6 +2451,8 @@ check_auth (const struct url *u, char *user, char *passwd, struct response *resp
+                                               auth_stat);
+ 
+           auth_err = *auth_stat;
++          xfree (auth_stat);
++          xfree (pth);
+           if (auth_err == RETROK)
+             {
+               request_set_header (req, "Authorization", value, rel_value);
+@@ -2464,8 +2466,6 @@ check_auth (const struct url *u, char *user, char *passwd, struct response *resp
+                   register_basic_auth_host (u->host);
+                 }
+ 
+-              xfree (pth);
+-              xfree (auth_stat);
+               *retry = true;
+               goto cleanup;
+             }
+-- 
+2.17.1
+
+
+From dfef92bac3997b9848e86d84a843d5d7dde4fd99 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Tue, 31 Jul 2018 16:58:12 +0200
+Subject: [PATCH 3/6] * src/http.c (http_loop): Fix RESOURCE LEAK found by
+ Coverity
+
+Error: RESOURCE_LEAK (CWE-772):
+wget-1.19.5/src/http.c:4486: alloc_fn: Storage is returned from allocation function "url_string".
+wget-1.19.5/src/url.c:2248:3: alloc_fn: Storage is returned from allocation function "xmalloc".
+wget-1.19.5/lib/xmalloc.c:41:11: alloc_fn: Storage is returned from allocation function "malloc".
+wget-1.19.5/lib/xmalloc.c:41:11: var_assign: Assigning: "p" = "malloc(n)".
+wget-1.19.5/lib/xmalloc.c:44:3: return_alloc: Returning allocated memory "p".
+wget-1.19.5/src/url.c:2248:3: var_assign: Assigning: "result" = "xmalloc(size)".
+wget-1.19.5/src/url.c:2248:3: var_assign: Assigning: "p" = "result".
+wget-1.19.5/src/url.c:2250:3: noescape: Resource "p" is not freed or pointed-to in function "memcpy". [Note: The source code implementation of the function has been overridden by a builtin model.]
+wget-1.19.5/src/url.c:2253:7: noescape: Resource "p" is not freed or pointed-to in function "memcpy". [Note: The source code implementation of the function has been overridden by a builtin model.]
+wget-1.19.5/src/url.c:2257:11: noescape: Resource "p" is not freed or pointed-to in function "memcpy". [Note: The source code implementation of the function has been overridden by a builtin model.]
+wget-1.19.5/src/url.c:2264:3: noescape: Resource "p" is not freed or pointed-to in function "memcpy". [Note: The source code implementation of the function has been overridden by a builtin model.]
+wget-1.19.5/src/url.c:2270:7: identity_transfer: Passing "p" as argument 1 to function "number_to_string", which returns an offset off that argument.
+wget-1.19.5/src/utils.c:1776:11: var_assign_parm: Assigning: "p" = "buffer".
+wget-1.19.5/src/utils.c:1847:3: return_var: Returning "p", which is a copy of a parameter.
+wget-1.19.5/src/url.c:2270:7: noescape: Resource "p" is not freed or pointed-to in function "number_to_string".
+wget-1.19.5/src/utils.c:1774:25: noescape: "number_to_string(char *, wgint)" does not free or save its parameter "buffer".
+wget-1.19.5/src/url.c:2270:7: var_assign: Assigning: "p" = "number_to_string(p, url->port)".
+wget-1.19.5/src/url.c:2273:3: noescape: Resource "p" is not freed or pointed-to in function "full_path_write".
+wget-1.19.5/src/url.c:1078:47: noescape: "full_path_write(struct url const *, char *)" does not free or save its parameter "where".
+wget-1.19.5/src/url.c:2287:3: return_alloc: Returning allocated memory "result".
+wget-1.19.5/src/http.c:4486: var_assign: Assigning: "hurl" = storage returned from "url_string(u, URL_AUTH_HIDE_PASSWD)".
+wget-1.19.5/src/http.c:4487: noescape: Resource "hurl" is not freed or pointed-to in "logprintf".
+wget-1.19.5/src/http.c:4513: leaked_storage: Variable "hurl" going out of scope leaks the storage it points to.
+\# 4511|               {
+\# 4512|                 printwhat (count, opt.ntry);
+\# 4513|->               continue;
+\# 4514|               }
+\# 4515|             else
+
+There are two conditional branches, which call continue, without freeing memory potentially allocated and pointed to by"hurl" pointer. In fase "!opt.verbose" is True and some of the appropriate conditions in the following if/else if construction, in which "continue" is called, are also true, then the memory allocated to "hurl" will leak.
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ src/http.c | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/src/http.c b/src/http.c
+index 4e0d467a..46fde6f2 100644
+--- a/src/http.c
++++ b/src/http.c
+@@ -4492,6 +4492,7 @@ http_loop (const struct url *u, struct url *original_url, char **newloc,
+               && (hstat.statcode == 500 || hstat.statcode == 501))
+             {
+               got_head = true;
++              xfree (hurl);
+               continue;
+             }
+           /* Maybe we should always keep track of broken links, not just in
+@@ -4510,6 +4511,7 @@ Remote file does not exist -- broken link!!!\n"));
+           else if (check_retry_on_http_error (hstat.statcode))
+             {
+               printwhat (count, opt.ntry);
++              xfree (hurl);
+               continue;
+             }
+           else
+-- 
+2.17.1
+
+
+From c045cdded4e3850724d8bb3a655852948e62c0df Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Thu, 2 Aug 2018 13:49:52 +0200
+Subject: [PATCH 4/6] * src/utils.c (open_stat): Fix RESOURCE LEAK found by
+ Coverity
+
+Error: RESOURCE_LEAK (CWE-772):
+wget-1.19.5/src/utils.c:914: open_fn: Returning handle opened by "open". [Note: The source code implementation of the function has been overridden by a user model.]
+wget-1.19.5/src/utils.c:914: var_assign: Assigning: "fd" = handle returned from "open(fname, flags, mode)".
+wget-1.19.5/src/utils.c:921: noescape: Resource "fd" is not freed or pointed-to in "fstat". [Note: The source code implementation of the function has been overridden by a builtin model.]
+wget-1.19.5/src/utils.c:924: leaked_handle: Handle variable "fd" going out of scope leaks the handle.
+\#  922|     {
+\#  923|       logprintf (LOG_NOTQUIET, _("Failed to stat file %s, error: %s\n"), fname, strerror(errno));
+\#  924|->     return -1;
+\#  925|     }
+\#  926|   #if !(defined(WINDOWS) || defined(__VMS))
+
+This seems to be a real issue, since the opened file descriptor in "fd"
+would leak. There is also additional check below the "fstat" call, which
+closes the opened "fd".
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ src/utils.c | 1 +
+ 1 file changed, 1 insertion(+)
+
+diff --git a/src/utils.c b/src/utils.c
+index 0cb905ad..c6258083 100644
+--- a/src/utils.c
++++ b/src/utils.c
+@@ -921,6 +921,7 @@ open_stat(const char *fname, int flags, mode_t mode, file_stats_t *fstats)
+   if (fstat (fd, &fdstats) == -1)
+   {
+     logprintf (LOG_NOTQUIET, _("Failed to stat file %s, error: %s\n"), fname, strerror(errno));
++    close (fd);
+     return -1;
+   }
+ #if !(defined(WINDOWS) || defined(__VMS))
+-- 
+2.17.1
+
+
+From 8b451f9f21cc1b00d1a08116b542fb7bd7589405 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Fri, 3 Aug 2018 16:19:20 +0200
+Subject: [PATCH 5/6] * src/warc.c (warc_write_start_record): Fix potential
+ RESOURCE LEAK
+
+In warc_write_start_record() function, the reutrn value of dup() is
+directly used in gzdopen() call and not stored anywhere. However the
+zlib documentation says that "The duplicated descriptor should be saved
+to avoid a leak, since gzdopen does not close fd if it fails." [1].
+This change stores the FD in a variable and closes it in case gzopen()
+fails.
+
+[1] https://www.zlib.net/manual.html
+
+Error: RESOURCE_LEAK (CWE-772):
+wget-1.19.5/src/warc.c:217: open_fn: Returning handle opened by "dup".
+wget-1.19.5/src/warc.c:217: leaked_handle: Failing to save or close handle opened by "dup(fileno(warc_current_file))" leaks it.
+\#  215|
+\#  216|         /* Start a new GZIP stream. */
+\#  217|->       warc_current_gzfile = gzdopen (dup (fileno (warc_current_file)), "wb9");
+\#  218|         warc_current_gzfile_uncompressed_size = 0;
+\#  219|
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ src/warc.c | 13 ++++++++++++-
+ 1 file changed, 12 insertions(+), 1 deletion(-)
+
+diff --git a/src/warc.c b/src/warc.c
+index 3482cf3b..5ebd04d7 100644
+--- a/src/warc.c
++++ b/src/warc.c
+@@ -203,6 +203,7 @@ warc_write_start_record (void)
+   /* Start a GZIP stream, if required. */
+   if (opt.warc_compression_enabled)
+     {
++      int dup_fd;
+       /* Record the starting offset of the new record. */
+       warc_current_gzfile_offset = ftello (warc_current_file);
+ 
+@@ -214,13 +215,23 @@ warc_write_start_record (void)
+       fflush (warc_current_file);
+ 
+       /* Start a new GZIP stream. */
+-      warc_current_gzfile = gzdopen (dup (fileno (warc_current_file)), "wb9");
++      dup_fd = dup (fileno (warc_current_file));
++      if (dup_fd < 0)
++        {
++          logprintf (LOG_NOTQUIET,
++_("Error duplicating WARC file file descriptor.\n"));
++          warc_write_ok = false;
++          return false;
++        }
++
++      warc_current_gzfile = gzdopen (dup_fd, "wb9");
+       warc_current_gzfile_uncompressed_size = 0;
+ 
+       if (warc_current_gzfile == NULL)
+         {
+           logprintf (LOG_NOTQUIET,
+ _("Error opening GZIP stream to WARC file.\n"));
++          close (dup_fd);
+           warc_write_ok = false;
+           return false;
+         }
+-- 
+2.17.1
+
+
+From 2f451dbf4e83c751f6bbba7ed26d90bf275fcbf7 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Fri, 24 Aug 2018 16:57:37 +0200
+Subject: [PATCH 6/6] * src/warc.c (warc_write_cdx_record): Fix RESOURCE LEAK
+ found by Coverity
+
+Error: RESOURCE_LEAK (CWE-772): - REAL ERROR
+wget-1.19.5/src/warc.c:1376: alloc_fn: Storage is returned from allocation function "url_escape".
+wget-1.19.5/src/url.c:284:3: alloc_fn: Storage is returned from allocation function "url_escape_1".
+wget-1.19.5/src/url.c:255:3: alloc_fn: Storage is returned from allocation function "xmalloc".
+wget-1.19.5/lib/xmalloc.c:41:11: alloc_fn: Storage is returned from allocation function "malloc".
+wget-1.19.5/lib/xmalloc.c:41:11: var_assign: Assigning: "p" = "malloc(n)".
+wget-1.19.5/lib/xmalloc.c:44:3: return_alloc: Returning allocated memory "p".
+wget-1.19.5/src/url.c:255:3: var_assign: Assigning: "newstr" = "xmalloc(newlen + 1)".
+wget-1.19.5/src/url.c:258:3: var_assign: Assigning: "p2" = "newstr".
+wget-1.19.5/src/url.c:275:3: return_alloc: Returning allocated memory "newstr".
+wget-1.19.5/src/url.c:284:3: return_alloc_fn: Directly returning storage allocated by "url_escape_1".
+wget-1.19.5/src/warc.c:1376: var_assign: Assigning: "redirect_location" = storage returned from "url_escape(redirect_location)".
+wget-1.19.5/src/warc.c:1381: noescape: Resource "redirect_location" is not freed or pointed-to in "fprintf".
+wget-1.19.5/src/warc.c:1387: leaked_storage: Returning without freeing "redirect_location" leaks the storage that it points to.
+\# 1385|     fflush (warc_current_cdx_file);
+\# 1386|
+\# 1387|->   return true;
+\# 1388|   }
+\# 1389|
+
+url_escape() really returns a newly allocated memory and it leaks when the warc_write_cdx_record() returns. The memory returned from url_escape() is usually stored in a temporary variable in other parts of the project and then freed. I took the same approach.
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ src/warc.c | 8 +++++---
+ 1 file changed, 5 insertions(+), 3 deletions(-)
+
+diff --git a/src/warc.c b/src/warc.c
+index 5ebd04d7..2eb74966 100644
+--- a/src/warc.c
++++ b/src/warc.c
+@@ -1364,6 +1364,7 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
+   char timestamp_str_cdx[15];
+   char offset_string[MAX_INT_TO_STRING_LEN(off_t)];
+   const char *checksum;
++  char *tmp_location = NULL;
+ 
+   memcpy (timestamp_str_cdx     , timestamp_str     , 4); /* "YYYY" "-" */
+   memcpy (timestamp_str_cdx +  4, timestamp_str +  5, 2); /* "mm"   "-" */
+@@ -1382,18 +1383,19 @@ warc_write_cdx_record (const char *url, const char *timestamp_str,
+   if (mime_type == NULL || strlen(mime_type) == 0)
+     mime_type = "-";
+   if (redirect_location == NULL || strlen(redirect_location) == 0)
+-    redirect_location = "-";
++    tmp_location = strdup ("-");
+   else
+-    redirect_location = url_escape(redirect_location);
++    tmp_location = url_escape(redirect_location);
+ 
+   number_to_string (offset_string, offset);
+ 
+   /* Print the CDX line. */
+   fprintf (warc_current_cdx_file, "%s %s %s %s %d %s %s - %s %s %s\n", url,
+            timestamp_str_cdx, url, mime_type, response_code, checksum,
+-           redirect_location, offset_string, warc_current_filename,
++           tmp_location, offset_string, warc_current_filename,
+            response_uuid);
+   fflush (warc_current_cdx_file);
++  free (tmp_location);
+ 
+   return true;
+ }
+-- 
+2.17.1
+

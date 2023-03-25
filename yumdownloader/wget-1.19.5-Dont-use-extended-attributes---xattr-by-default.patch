@@ -1,0 +1,62 @@
+From 0e991351c8bd3996bfc396402a67445abcf1319e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Tim=20R=C3=BChsen?= <tim.ruehsen@gmx.de>
+Date: Wed, 26 Dec 2018 13:51:48 +0100
+Subject: [PATCH] Don't use extended attributes (--xattr) by default
+
+---
+ doc/wget.texi | 8 ++++++++
+ src/init.c    | 4 ----
+ src/main.c    | 2 +-
+ 3 files changed, 9 insertions(+), 5 deletions(-)
+
+diff --git a/doc/wget.texi b/doc/wget.texi
+index 66edab8..d672bbf 100644
+--- a/doc/wget.texi
++++ b/doc/wget.texi
+@@ -540,6 +540,14 @@ right NUMBER.
+ Set preferred location for Metalink resources. This has effect if multiple
+ resources with same priority are available.
+ 
++@cindex xattr
++@item --xattr
++Enable use of file system's extended attributes to save the
++original URL and the Referer HTTP header value if used.
++
++Be aware that the URL might contain private information like
++access tokens or credentials.
++
+ 
+ @cindex force html
+ @item -F
+diff --git a/src/init.c b/src/init.c
+index eb81ab4..800970c 100644
+--- a/src/init.c
++++ b/src/init.c
+@@ -509,11 +509,7 @@ defaults (void)
+   opt.hsts = true;
+ #endif
+ 
+-#ifdef ENABLE_XATTR
+-  opt.enable_xattr = true;
+-#else
+   opt.enable_xattr = false;
+-#endif
+ }
+ 
+ /* Return the user's home directory (strdup-ed), or NULL if none is
+diff --git a/src/main.c b/src/main.c
+index 81db931..6ac1621 100644
+--- a/src/main.c
++++ b/src/main.c
+@@ -754,7 +754,7 @@ Download:\n"),
+ #endif
+ #ifdef ENABLE_XATTR
+     N_("\
+-       --no-xattr                  turn off storage of metadata in extended file attributes\n"),
++       --xattr                     turn on storage of metadata in extended file attributes\n"),
+ #endif
+     "\n",
+ 
+-- 
+2.17.2
+

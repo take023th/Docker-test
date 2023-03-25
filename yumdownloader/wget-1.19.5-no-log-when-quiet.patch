@@ -1,0 +1,26 @@
+From 7ddcebd61e170fb03d361f82bf8f5550ee62a1ae Mon Sep 17 00:00:00 2001
+From: Tomas Korbar <tkorbar@redhat.com>
+Date: Wed, 29 Aug 2018 12:33:43 +0200
+Subject: [PATCH] Avoid creating empty wget-log when using -O and -q in
+ background
+
+* src/log.c (check_redirect_output): Check for quiet mode
+---
+ src/log.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/src/log.c b/src/log.c
+index d879dffe..e8cca2f3 100644
+--- a/src/log.c
++++ b/src/log.c
+@@ -974,7 +974,7 @@ check_redirect_output (void)
+     {
+       pid_t foreground_pgrp = tcgetpgrp (STDIN_FILENO);
+ 
+-      if (foreground_pgrp != -1 && foreground_pgrp != getpgrp ())
++      if (foreground_pgrp != -1 && foreground_pgrp != getpgrp () && !opt.quiet)
+         {
+           /* Process backgrounded */
+           redirect_output (true,NULL);
+-- 
+2.17.1

@@ -1,0 +1,110 @@
+From 2bbdfd76dab187ab29e22bed18d737f94343e629 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Tue, 4 Sep 2018 11:22:14 +0200
+Subject: [PATCH] Add TLS 1.3 support for GnuTLS
+
+* doc/wget.texi: Add "TLSv1_3" to --secure-protocol
+* src/gnutls.c (set_prio_default): Use GNUTLS_TLS1_3 where needed
+
+Wget currently allows specifying "TLSv1_3" as the parameter for
+--secure-protocol option. However it is only implemented for OpenSSL
+and in case wget is compiled with GnuTLS, it causes wget to abort with:
+GnuTLS: unimplemented 'secure-protocol' option value 6
+
+GnuTLS contains TLS 1.3 implementation since version 3.6.3 [1]. However
+currently it must be enabled explicitly in the application of it to be
+used. This will change after the draft is finalized. [2] However for
+the time being, I enabled it explicitly in case "TLSv1_3" is used with
+--secure-protocol.
+
+I also fixed man page to contain "TLSv1_3" in all listings of available
+parameters for --secure-protocol
+
+[1] https://lists.gnupg.org/pipermail/gnutls-devel/2018-July/008584.html
+[2] https://nikmav.blogspot.com/2018/05/gnutls-and-tls-13.html
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ doc/wget.texi |  6 +++---
+ src/gnutls.c  | 28 ++++++++++++++++++++++++++++
+ 2 files changed, 31 insertions(+), 3 deletions(-)
+
+diff --git a/doc/wget.texi b/doc/wget.texi
+index 38b4a245..7ae19d8e 100644
+--- a/doc/wget.texi
++++ b/doc/wget.texi
+@@ -1780,9 +1780,9 @@ If Wget is compiled without SSL support, none of these options are available.
+ @cindex SSL protocol, choose
+ @item --secure-protocol=@var{protocol}
+ Choose the secure protocol to be used.  Legal values are @samp{auto},
+-@samp{SSLv2}, @samp{SSLv3}, @samp{TLSv1}, @samp{TLSv1_1}, @samp{TLSv1_2}
+-and @samp{PFS}.  If @samp{auto} is used, the SSL library is given the
+-liberty of choosing the appropriate protocol automatically, which is
++@samp{SSLv2}, @samp{SSLv3}, @samp{TLSv1}, @samp{TLSv1_1}, @samp{TLSv1_2},
++@samp{TLSv1_3} and @samp{PFS}.  If @samp{auto} is used, the SSL library is
++given the liberty of choosing the appropriate protocol automatically, which is
+ achieved by sending a TLSv1 greeting. This is the default.
+ 
+ Specifying @samp{SSLv2}, @samp{SSLv3}, @samp{TLSv1}, @samp{TLSv1_1},
+diff --git a/src/gnutls.c b/src/gnutls.c
+index 07844c52..206d0b09 100644
+--- a/src/gnutls.c
++++ b/src/gnutls.c
+@@ -565,6 +565,15 @@ set_prio_default (gnutls_session_t session)
+       err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0:-VERS-TLS1.0:-VERS-TLS1.1", NULL);
+       break;
+ 
++    case secure_protocol_tlsv1_3:
++#if GNUTLS_VERSION_NUMBER >= 0x030603
++      err = gnutls_priority_set_direct (session, "NORMAL:-VERS-SSL3.0:+VERS-TLS1.3:-VERS-TLS1.0:-VERS-TLS1.1:-VERS-TLS1.2", NULL);
++      break;
++#else
++      logprintf (LOG_NOTQUIET, _("Your GnuTLS version is too old to support TLS 1.3\n"));
++      return -1;
++#endif
++
+     case secure_protocol_pfs:
+       err = gnutls_priority_set_direct (session, "PFS:-VERS-SSL3.0", NULL);
+       if (err != GNUTLS_E_SUCCESS)
+@@ -596,19 +605,38 @@ set_prio_default (gnutls_session_t session)
+       allowed_protocols[0] = GNUTLS_TLS1_0;
+       allowed_protocols[1] = GNUTLS_TLS1_1;
+       allowed_protocols[2] = GNUTLS_TLS1_2;
++#if GNUTLS_VERSION_NUMBER >= 0x030603
++      allowed_protocols[3] = GNUTLS_TLS1_3;
++#endif
+       err = gnutls_protocol_set_priority (session, allowed_protocols);
+       break;
+ 
+     case secure_protocol_tlsv1_1:
+       allowed_protocols[0] = GNUTLS_TLS1_1;
+       allowed_protocols[1] = GNUTLS_TLS1_2;
++#if GNUTLS_VERSION_NUMBER >= 0x030603
++      allowed_protocols[2] = GNUTLS_TLS1_3;
++#endif
+       err = gnutls_protocol_set_priority (session, allowed_protocols);
+       break;
+ 
+     case secure_protocol_tlsv1_2:
+       allowed_protocols[0] = GNUTLS_TLS1_2;
++#if GNUTLS_VERSION_NUMBER >= 0x030603
++      allowed_protocols[1] = GNUTLS_TLS1_3;
++#endif
++      err = gnutls_protocol_set_priority (session, allowed_protocols);
++      break;
++
++    case secure_protocol_tlsv1_3:
++#if GNUTLS_VERSION_NUMBER >= 0x030603
++      allowed_protocols[0] = GNUTLS_TLS1_3;
+       err = gnutls_protocol_set_priority (session, allowed_protocols);
+       break;
++#else
++      logprintf (LOG_NOTQUIET, _("Your GnuTLS version is too old to support TLS 1.3\n"));
++      return -1;
++#endif
+ 
+     default:
+       logprintf (LOG_NOTQUIET, _("GnuTLS: unimplemented 'secure-protocol' option value %d\n"), opt.secure_protocol);
+-- 
+2.17.1
+

@@ -1,0 +1,41 @@
+From 8990d706da3e32b12debd9b8dea7b42134631770 Mon Sep 17 00:00:00 2001
+From: Tomas Hozza <thozza@redhat.com>
+Date: Fri, 10 Aug 2018 14:32:13 +0200
+Subject: [PATCH] Don't limit the test suite HTTPS server to TLSv1
+
+In Fedora, we are implementing crypto policies, in order to enhance the
+security of user systems. This is done on the system level by global
+configuration. It may happen that due to the active policy, only
+TLSv1.2 or higher will be available in crypto libraries. While wget as
+a client will by default determine the minimal TLS version supported by
+both client and server, the HTTPS server implementation in testenv/
+hardcodes use of TLSv1. As a result all HTTPS related tests fail in
+case a more hardened crypto policy is set on the Fedora system.
+
+This change removes the explicit TLS version setting and leaves the
+determination of the minimal supported TLS version on the server and
+client.
+
+More information about Fedora change can be found here:
+https://fedoraproject.org/wiki/Changes/StrongCryptoSettings
+
+Signed-off-by: Tomas Hozza <thozza@redhat.com>
+---
+ testenv/server/http/http_server.py | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/testenv/server/http/http_server.py b/testenv/server/http/http_server.py
+index 434666dd..6d8fc9e8 100644
+--- a/testenv/server/http/http_server.py
++++ b/testenv/server/http/http_server.py
+@@ -49,7 +49,6 @@ class HTTPSServer(StoppableHTTPServer):
+                                                'server-key.pem'))
+         self.socket = ssl.wrap_socket(
+             sock=socket.socket(self.address_family, self.socket_type),
+-            ssl_version=ssl.PROTOCOL_TLSv1,
+             certfile=CERTFILE,
+             keyfile=KEYFILE,
+             server_side=True
+-- 
+2.17.1
+
